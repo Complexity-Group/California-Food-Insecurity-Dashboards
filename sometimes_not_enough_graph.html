@@ -1,0 +1,302 @@
+<div class="fi-sometimes-card">
+  <div class="fi-sometimes-panel">
+    <canvas id="fiSometimesChart"></canvas>
+  </div>
+
+  <div id="fi-sometimes-year-labels" class="fi-sometimes-year-labels"></div>
+
+  <div class="fi-sometimes-ylabel">Persons (in million)</div>
+</div>
+
+<style>
+  .fi-sometimes-card{
+    position:relative;
+    background: transparent;
+    max-width:650px;
+    margin:0 auto;
+    padding:0 18px 18px;
+    border-radius:6px;
+    font-family:Arial, Helvetica, sans-serif;
+  }
+
+  .fi-sometimes-panel{
+    height:250px;
+    padding:0 36px;
+  }
+
+  .fi-sometimes-year-labels{
+    display:flex;
+    justify-content:space-between;
+    margin-top:6px;
+    padding:0 36px;
+    font-size:12px;
+    color:#000;
+    font-family:Arial, Helvetica, sans-serif;
+    line-height:1;
+  }
+
+  .fi-sometimes-year-label{
+    text-align:center;
+    flex:1;
+  }
+
+  .fi-sometimes-ylabel{
+    position:absolute;
+    left:6px;
+    top:70%;
+    transform:translateY(-50%) rotate(-90deg);
+    transform-origin:left top;
+    font-size:14px;
+    color:#000;
+    pointer-events:none;
+    font-family:Arial, Helvetica, sans-serif;
+  }
+
+  .fi-sometimes-card canvas{
+    width:100% !important;
+    height:100% !important;
+    display:block;
+  }
+
+  @media (max-width:768px){
+    .fi-sometimes-card{ max-width:100%; }
+    .fi-sometimes-panel{ height:210px; padding:0 10px; }
+    .fi-sometimes-year-labels{
+      padding:0 10px;
+      font-size:11px;
+      margin-top:4px;
+    }
+    .fi-sometimes-ylabel{ font-size:12px; }
+  }
+</style>
+
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
+<script>
+(() => {
+  const SOMETIMES_CSV_URL =
+    "https://docs.google.com/spreadsheets/d/e/2PACX-1vTbEjf2GzChSgrtkUHaj1BwOEkDdCGzmGNl4aPxs-Gq7JBPSwRxf7I1zYMKRltGsg/pub?gid=983300747&single=true&output=csv";
+
+  const SOMETIMES_COL = {
+    date: "date",
+    value: "sometimes_not_enough_millions",
+    trend: "sometimes_not_enough_trend_millions"
+  };
+
+  async function sometimesFetchCsv(url){
+    const res = await fetch(url, { cache: "no-store" });
+    if(!res.ok) throw new Error("Failed to fetch CSV");
+    return res.text();
+  }
+
+  function sometimesParseCsv(text){
+    const lines = text.trim().split(/\r?\n/);
+    const headers = lines[0].split(",").map(h => h.trim());
+    const idx = n => headers.indexOf(n);
+    const num = v => {
+      const cleaned = String(v ?? "").trim();
+      return cleaned !== "" && cleaned !== "#N/A" && !isNaN(cleaned) ? +cleaned : null;
+    };
+
+    const rows = [];
+    for(let i = 1; i < lines.length; i++){
+      const p = lines[i].split(",");
+      const d = p[idx(SOMETIMES_COL.date)];
+      if(!d) continue;
+      rows.push({
+        date: d.trim(),
+        value: num(p[idx(SOMETIMES_COL.value)]),
+        trend: num(p[idx(SOMETIMES_COL.trend)])
+      });
+    }
+    rows.sort((a, b) => a.date.localeCompare(b.date));
+    return rows;
+  }
+
+  function sometimesFillNullsLinear(arr){
+    const out = arr.slice();
+    let first = out.findIndex(v => v != null);
+    if(first < 0) return out;
+
+    for(let i = 0; i < first; i++) out[i] = out[first];
+
+    let last = first;
+    for(let i = first + 1; i < out.length; i++){
+      if(out[i] == null) continue;
+      for(let k = 1; k < i - last; k++){
+        out[last + k] = out[last] + (out[i] - out[last]) * (k / (i - last));
+      }
+      last = i;
+    }
+
+    for(let i = last + 1; i < out.length; i++) out[i] = out[last];
+    return out;
+  }
+
+  function sometimesOverlayTrend(area, trend){
+    return trend.map((t, i) => {
+      const a = area[i];
+      if(a == null) return t;
+      if(t == null) return a;
+      return Math.max(a, t);
+    });
+  }
+
+  function sometimesFmtMonthOnly(iso){
+    const d = new Date(iso + "T00:00:00");
+    return d.toLocaleString("en-US", { month: "short" });
+  }
+
+  function getSometimesYearGroups(labels){
+    if(!labels.length) return [];
+
+    const groups = [];
+    let currentYear = new Date(labels[0] + "T00:00:00").getFullYear();
+    let count = 0;
+
+    labels.forEach((d) => {
+      const y = new Date(d + "T00:00:00").getFullYear();
+      if(y === currentYear){
+        count++;
+      } else {
+        groups.push({ year: currentYear, count });
+        currentYear = y;
+        count = 1;
+      }
+    });
+
+    groups.push({ year: currentYear, count });
+    return groups;
+  }
+
+  function renderSometimesYearLabels(labels){
+    const container = document.getElementById("fi-sometimes-year-labels");
+    if(!container) return;
+
+    container.innerHTML = "";
+    const groups = getSometimesYearGroups(labels);
+
+    groups.forEach(g => {
+      const div = document.createElement("div");
+      div.className = "fi-sometimes-year-label";
+      div.style.flex = g.count;
+      div.textContent = g.year;
+      container.appendChild(div);
+    });
+  }
+
+  function sometimesBaseOptions(){
+    const isMobile = window.matchMedia("(max-width: 768px)").matches;
+    return {
+      responsive: true,
+      maintainAspectRatio: false,
+      layout: { padding: { top: 18, bottom: 10, left: 8, right: 8 } },
+      plugins: {
+        legend: { display: false },
+        title: {
+          display: false,
+          text: "Sometimes not enough",
+          color: "#000",
+          align: "center",
+          padding: { top: 4, bottom: 12 },
+          font: {
+            size: isMobile ? 14 : 18,
+            family: "Arial, Helvetica, sans-serif",
+            weight: "normal"
+          }
+        }
+      },
+      elements: { line: { tension: 0.15 }, point: { radius: 0 } },
+      scales: {
+        x: {
+          grid: { display: false },
+          ticks: {
+            font: { size: isMobile ? 11 : 13 },
+            autoSkip: false,
+            maxRotation: isMobile ? 35 : 0,
+            minRotation: isMobile ? 35 : 0,
+            padding: 6,
+            color: "#000"
+          },
+          border: { color: "#000", width: 1.5 }
+        },
+        y: {
+          min: 0,
+          max: 4,
+          ticks: { stepSize: 1, font: { size: isMobile ? 11 : 12 }, padding: 6, color: "#000" },
+          grid: { display: false },
+          border: { color: "#000", width: 1.5 }
+        }
+      }
+    };
+  }
+
+  let sometimesChartInstance = null;
+
+  async function sometimesBuildChart(){
+    const rows = sometimesParseCsv(await sometimesFetchCsv(SOMETIMES_CSV_URL));
+    const labels = rows.map(r => r.date);
+    const area = rows.map(r => r.value);
+    const trend = sometimesOverlayTrend(area, sometimesFillNullsLinear(rows.map(r => r.trend)));
+
+    renderSometimesYearLabels(labels);
+
+    const canvas = document.getElementById("fiSometimesChart");
+    if(!canvas) return;
+
+    if(sometimesChartInstance) sometimesChartInstance.destroy();
+
+    const baseOptions = sometimesBaseOptions();
+
+    sometimesChartInstance = new Chart(canvas, {
+      type: "line",
+      data: {
+        labels,
+        datasets: [
+          {
+            data: area,
+            fill: true,
+            backgroundColor: "#ff3b0a",
+            borderWidth: 0,
+            order: 1
+          },
+          {
+            data: trend,
+            fill: false,
+            spanGaps: true,
+            borderColor: "rgba(0,0,0,0.75)",
+            borderWidth: 2,
+            borderDash: [1, 7],
+            borderCapStyle: "round",
+            tension: 0.15,
+            pointRadius: 1.8,
+            pointBackgroundColor: "#000",
+            pointBorderWidth: 0,
+            order: 99
+          }
+        ]
+      },
+      options: {
+        ...baseOptions,
+        scales: {
+          ...baseOptions.scales,
+          x: {
+            ...baseOptions.scales.x,
+            ticks: {
+              ...baseOptions.scales.x.ticks,
+              callback: (v, i) => sometimesFmtMonthOnly(labels[i] || "")
+            }
+          }
+        }
+      }
+    });
+  }
+
+  let sometimesResizeTimer = null;
+  window.addEventListener("resize", () => {
+    clearTimeout(sometimesResizeTimer);
+    sometimesResizeTimer = setTimeout(() => sometimesBuildChart().catch(console.error), 200);
+  });
+
+  sometimesBuildChart().catch(console.error);
+})();
+</script>

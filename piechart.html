@@ -1,0 +1,401 @@
+<div class="pie-card">
+  <div class="pie-grid">
+    <div class="pie-panel">
+      <div class="pie-canvas-wrap">
+        <canvas id="pieRaceChart"></canvas>
+        <div id="labelsRaceChart" class="pie-number-layer"></div>
+      </div>
+      <div id="legendRaceChart" class="pie-legend"></div>
+    </div>
+
+    <div class="pie-panel">
+      <div class="pie-canvas-wrap">
+        <canvas id="pieAgeChart"></canvas>
+        <div id="labelsAgeChart" class="pie-number-layer"></div>
+      </div>
+      <div id="legendAgeChart" class="pie-legend"></div>
+    </div>
+  </div>
+</div>
+
+<style>
+  .pie-card{
+    background: transparent;
+    border-radius:0;
+    padding:10px 18px 18px;
+    border:none;
+    font-family: Arial, Helvetica, sans-serif;
+    max-width: 760px;
+    margin: 0 auto;
+    box-sizing: border-box;
+
+    position: relative;
+    isolation: isolate;
+    overflow: visible;
+  }
+
+  .pie-grid{
+    display:grid;
+    grid-template-columns:1fr 1fr;
+    gap:18px;
+    align-items:start;
+
+    position: relative;
+  }
+
+  .pie-panel{
+    display:flex;
+    flex-direction:column;
+    align-items:center;
+    width:100%;
+  }
+
+  .pie-canvas-wrap{
+    position:relative;
+    width:100%;
+    max-width:340px;
+    height:255px;
+
+    overflow: visible;
+  }
+
+  .pie-card canvas{
+    width:100% !important;
+    height:255px !important;
+    display:block;
+  }
+
+  .pie-number-layer{
+    position:absolute;
+    inset:0;
+    pointer-events:none;
+    z-index:5;
+  }
+
+.pie-number-label{
+  position:absolute;
+  transform:translate(-50%, -50%);
+  font-family: Arial, Helvetica, sans-serif;
+  font-weight:700;
+  font-size:11px;
+  color:#111;
+  white-space:nowrap;
+  pointer-events:none;
+  text-shadow:none;
+}
+
+.pie-number-label.inside{
+  color:#111;
+  text-shadow:none;
+}
+
+.pie-number-label.outside{
+  color:#111;
+  font-size:11px;
+  background:transparent;
+  padding:0;
+  border-radius:0;
+  text-shadow:none;
+}
+  .pie-legend{
+    width:100%;
+    max-width:340px;
+    margin-top:8px;
+    display:grid;
+    grid-template-columns: 14px 1fr;
+    gap:6px 10px;
+    font-size:14px;
+    line-height:1.15;
+    color:#111;
+    font-family: Arial, Helvetica, sans-serif;
+  }
+
+  .pie-legend.two-col{
+    grid-template-columns: 14px 1fr 14px 1fr;
+    column-gap: 18px;
+  }
+
+  .legend-swatch{
+    width:10px;
+    height:10px;
+    border-radius:2px;
+    align-self:center;
+    margin-left:2px;
+  }
+
+  @media (max-width: 768px){
+    .pie-card{
+      max-width:100%;
+      margin:0;
+      padding:10px 12px 14px;
+    }
+
+    .pie-grid{
+      grid-template-columns:1fr;
+      gap:16px;
+    }
+
+    .pie-canvas-wrap{
+      max-width:300px;
+      height:235px;
+    }
+
+    .pie-card canvas{
+      height:235px !important;
+    }
+
+    .pie-legend{
+      max-width:300px;
+      font-size:13px;
+    }
+
+    .pie-legend.two-col{
+      grid-template-columns: 14px 1fr;
+      column-gap: 10px;
+    }
+  }
+</style>
+
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/papaparse@5.4.1/papaparse.min.js"></script>
+
+<script>
+(() => {
+  const PIE_CSV_URL =
+    "https://docs.google.com/spreadsheets/d/e/2PACX-1vTbEjf2GzChSgrtkUHaj1BwOEkDdCGzmGNl4aPxs-Gq7JBPSwRxf7I1zYMKRltGsg/pub?gid=1619021345&single=true&output=csv";
+
+  const PIE_FMT = new Intl.NumberFormat("en-US");
+
+  const pieRaceColorMap = new Map([
+    ["Hispanic or Latino", "#3f6fc8"],
+    ["White only", "#f0853a"],
+    ["Black only", "#a9a9a9"],
+    ["Asian only", "#ffc107"],
+    ["Two or more races", "#5ea0d8"]
+  ]);
+
+  const pieAgeColorMap = new Map([
+    ["18-24", "#3f6fc8"],
+    ["25-39", "#f0853a"],
+    ["40-54", "#a9a9a9"],
+    ["55-64", "#ffc107"],
+    ["65 and above", "#5ea0d8"]
+  ]);
+
+  function pieHashHue(str){
+    let h = 0;
+    for(let i=0;i<str.length;i++) h = (h * 31 + str.charCodeAt(i)) >>> 0;
+    return h % 360;
+  }
+
+  function pieHslColor(h){
+    return `hsl(${h} 70% 55%)`;
+  }
+
+  function pieColorForLabel(label, map, usedSet){
+    if(map.has(label)) return map.get(label);
+    let hue = pieHashHue(label);
+    let col = pieHslColor(hue);
+    let tries = 0;
+
+    while(usedSet.has(col) && tries < 24){
+      hue = (hue + 23) % 360;
+      col = pieHslColor(hue);
+      tries++;
+    }
+
+    usedSet.add(col);
+    return col;
+  }
+
+  function pieColorsFor(labels, map){
+    const used = new Set([...map.values()]);
+    return labels.map(l => pieColorForLabel(l, map, used));
+  }
+
+  function pieRenderLegend(containerId, labels, colors){
+    const el = document.getElementById(containerId);
+    el.innerHTML = "";
+
+    const many = labels.length > 6;
+    el.classList.toggle("two-col", many);
+    el.style.fontSize = many ? "12px" : "14px";
+
+    labels.forEach((lab, i) => {
+      const sw = document.createElement("div");
+      sw.className = "legend-swatch";
+      sw.style.background = colors[i];
+
+      const tx = document.createElement("div");
+      tx.textContent = lab;
+
+      el.appendChild(sw);
+      el.appendChild(tx);
+    });
+  }
+
+  function pieCleanRows(rows){
+    return rows
+      .map(r => ({
+        group: String(r.Group ?? r.group ?? "").trim().toLowerCase(),
+        category: String(r.Category ?? r.category ?? "").trim(),
+        value: Number(String(r.Value ?? r.value ?? "").replace(/,/g, "").trim())
+      }))
+      .filter(r => r.group && r.category && Number.isFinite(r.value) && r.value > 0);
+  }
+
+  function pieCombineDuplicates(rows){
+    const order = [];
+    const m = new Map();
+
+    for(const r of rows){
+      if(!m.has(r.category)) order.push(r.category);
+      m.set(r.category, (m.get(r.category) || 0) + r.value);
+    }
+
+    return order.map(category => ({ category, value: m.get(category) }));
+  }
+
+  function pieRenderHtmlNumbers(chart, layerId){
+    const layer = document.getElementById(layerId);
+    if(!layer) return;
+
+    layer.innerHTML = "";
+
+    const meta = chart.getDatasetMeta(0);
+    if(!meta?.data?.length) return;
+
+    const values = chart.data.datasets[0].data.map(v => Number(v) || 0);
+    const total = values.reduce((a,b) => a + b, 0);
+    if(!total) return;
+
+    const scaleX = chart.canvas.clientWidth / chart.width;
+    const scaleY = chart.canvas.clientHeight / chart.height;
+
+    meta.data.forEach((arc, i) => {
+      const v = values[i];
+      const pct = v / total;
+      const angle = (arc.startAngle + arc.endAngle) / 2;
+      const alignOffset = Math.cos(angle) > 0 ? 6 : -6;
+
+      const label = document.createElement("div");
+      label.className = "pie-number-label";
+      label.textContent = PIE_FMT.format(v);
+
+      let x, y;
+
+      if(pct >= 0.18 || Math.cos(angle) < -0.75){
+        label.classList.add("inside");
+
+        const r = arc.outerRadius * 0.42;
+        x = arc.x + Math.cos(angle) * r;
+        y = arc.y + Math.sin(angle) * r;
+      } else {
+        label.classList.add("outside");
+
+        const r = arc.outerRadius + 11;
+        x = arc.x + Math.cos(angle) * r + alignOffset;
+        y = arc.y + Math.sin(angle) * r - 8;
+
+        x = Math.max(22, Math.min(chart.width - 22, x));
+        y = Math.max(14, Math.min(chart.height - 14, y));
+      }
+
+      label.style.left = `${x * scaleX}px`;
+      label.style.top = `${y * scaleY}px`;
+
+      layer.appendChild(label);
+    });
+  }
+
+  let pieRaceChartInstance = null;
+  let pieAgeChartInstance = null;
+
+  function pieMakeChart(canvasId, labels, values, colors, labelLayerId){
+    return new Chart(document.getElementById(canvasId), {
+      type: "pie",
+      data: {
+        labels,
+        datasets: [{
+          data: values,
+          backgroundColor: colors,
+          borderColor: "#fff",
+          borderWidth: 3
+        }]
+      },
+      options: {
+        responsive: true,
+        maintainAspectRatio: false,
+        animation: {
+          duration: 0,
+          onComplete: (animation) => {
+            pieRenderHtmlNumbers(animation.chart, labelLayerId);
+          }
+        },
+        layout: {
+          padding: { top: 20, right: 10, bottom: 10, left: 10 }
+        },
+        plugins: {
+          legend: { display: false },
+          tooltip: {
+            callbacks: {
+              label: (ctx) => `${ctx.label}: ${PIE_FMT.format(ctx.parsed)}`
+            }
+          }
+        }
+      }
+    });
+  }
+
+  function pieRefreshHtmlNumbers(){
+    if(pieRaceChartInstance){
+      pieRenderHtmlNumbers(pieRaceChartInstance, "labelsRaceChart");
+    }
+
+    if(pieAgeChartInstance){
+      pieRenderHtmlNumbers(pieAgeChartInstance, "labelsAgeChart");
+    }
+  }
+
+  Papa.parse(PIE_CSV_URL, {
+    download: true,
+    header: true,
+    skipEmptyLines: true,
+    complete: (res) => {
+      const rows = pieCleanRows(res.data);
+
+      const raceRows = rows.filter(r => r.group === "race");
+      const ageRows  = rows.filter(r => r.group === "age");
+
+      const raceAgg = pieCombineDuplicates(raceRows);
+      const ageAgg  = pieCombineDuplicates(ageRows);
+
+      const raceLabels = raceAgg.map(r => r.category);
+      const raceValues = raceAgg.map(r => r.value);
+      const raceColors = pieColorsFor(raceLabels, pieRaceColorMap);
+
+      const ageLabels = ageAgg.map(r => r.category);
+      const ageValues = ageAgg.map(r => r.value);
+      const ageColors = pieColorsFor(ageLabels, pieAgeColorMap);
+
+      if(pieRaceChartInstance) pieRaceChartInstance.destroy();
+      if(pieAgeChartInstance) pieAgeChartInstance.destroy();
+
+      pieRaceChartInstance = pieMakeChart("pieRaceChart", raceLabels, raceValues, raceColors, "labelsRaceChart");
+      pieAgeChartInstance  = pieMakeChart("pieAgeChart", ageLabels, ageValues, ageColors, "labelsAgeChart");
+
+      pieRenderLegend("legendRaceChart", raceLabels, raceColors);
+      pieRenderLegend("legendAgeChart", ageLabels, ageColors);
+
+      setTimeout(pieRefreshHtmlNumbers, 300);
+      setTimeout(pieRefreshHtmlNumbers, 1000);
+      setTimeout(pieRefreshHtmlNumbers, 2000);
+    },
+    error: (err) => console.error(err)
+  });
+
+  window.addEventListener("resize", () => {
+    setTimeout(pieRefreshHtmlNumbers, 150);
+  });
+})();
+</script>
